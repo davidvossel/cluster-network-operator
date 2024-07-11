@@ -112,6 +112,16 @@ func renderMultusAdmissonControllerConfig(manifestDir string, externalControlPla
 		data.Data["HCPNodeSelector"] = bootstrapResult.Infra.HostedControlPlane.NodeSelector
 		data.Data["PriorityClass"] = bootstrapResult.Infra.HostedControlPlane.PriorityClass
 
+		if len(bootstrapResult.Infra.HostedControlPlane.Tolerations) != 0 {
+			tolerations, err := hypershift.TolerationsToStringArray(bootstrapResult.Infra.HostedControlPlane.Tolerations)
+			if err != nil {
+				return nil, err
+			}
+			data.Data["HCPTolerations"] = tolerations
+		} else {
+			data.Data["HCPTolerations"] = ""
+		}
+
 		// Preserve any existing multus container resource requests which may have been modified by an external source
 		multusDeploy := &appsv1.Deployment{}
 		err = client.ClientFor(clientName).CRClient().Get(

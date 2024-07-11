@@ -83,6 +83,16 @@ func renderCloudNetworkConfigController(conf *operv1.NetworkSpec, bootstrapResul
 	manifestDirs := make([]string, 0, 2)
 	manifestDirs = append(manifestDirs, filepath.Join(manifestDir, "cloud-network-config-controller/common"))
 	if hcpCfg := hypershift.NewHyperShiftConfig(); hcpCfg.Enabled {
+		if len(cloudBootstrapResult.HostedControlPlane.Tolerations) != 0 {
+			tolerations, err := hypershift.TolerationsToStringArray(cloudBootstrapResult.HostedControlPlane.Tolerations)
+			if err != nil {
+				return nil, err
+			}
+			data.Data["HCPTolerations"] = tolerations
+		} else {
+			data.Data["HCPTolerations"] = ""
+		}
+
 		data.Data["CLIImage"] = os.Getenv("CLI_IMAGE")
 		data.Data["TokenMinterImage"] = os.Getenv("TOKEN_MINTER_IMAGE")
 		data.Data["TokenAudience"] = os.Getenv("TOKEN_AUDIENCE")

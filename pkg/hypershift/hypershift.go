@@ -10,6 +10,8 @@ import (
 
 	configv1 "github.com/openshift/api/config/v1"
 	operv1 "github.com/openshift/api/operator/v1"
+	"gopkg.in/yaml.v2"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -56,6 +58,7 @@ type HostedControlPlane struct {
 	ClusterID                    string
 	ControllerAvailabilityPolicy AvailabilityPolicy
 	NodeSelector                 map[string]string
+	Tolerations                  []corev1.Toleration
 	AdvertiseAddress             string
 	AdvertisePort                int
 	PriorityClass                string
@@ -152,6 +155,56 @@ func ParseHostedControlPlane(hcp *unstructured.Unstructured) (*HostedControlPlan
 		return nil, fmt.Errorf("failed extract nodeSelector: %v", err)
 	}
 
+	var tolerations []corev1.Toleration
+	tolerationsArray, tolerationsArrayFound, err := unstructured.NestedFieldCopy(hcp.UnstructuredContent(), "spec", "tolerations")
+	if tolerationsArrayFound {
+		tolerationsArrayConverted, hasConverted := tolerationsArray.([]interface{})
+		if hasConverted {
+			for _, entry := range tolerationsArrayConverted {
+				tolerationConverted, hasConverted := entry.(map[string]interface{})
+				if hasConverted {
+					toleration := corev1.Toleration{}
+					raw, ok := tolerationConverted["key"]
+					if ok {
+						str, isString := raw.(string)
+						if isString {
+							toleration.Key = str
+						}
+					}
+					raw, ok = tolerationConverted["operator"]
+					if ok {
+						op, isOperator := raw.(string)
+						if isOperator {
+							toleration.Operator = corev1.TolerationOperator(op)
+						}
+					}
+					raw, ok = tolerationConverted["value"]
+					if ok {
+						str, isString := raw.(string)
+						if isString {
+							toleration.Value = str
+						}
+					}
+					raw, ok = tolerationConverted["effect"]
+					if ok {
+						effect, isEffect := raw.(string)
+						if isEffect {
+							toleration.Effect = corev1.TaintEffect(effect)
+						}
+					}
+					raw, ok = tolerationConverted["tolerationSeconds"]
+					if ok {
+						seconds, isSeconds := raw.(*int64)
+						if isSeconds {
+							toleration.TolerationSeconds = seconds
+						}
+					}
+					tolerations = append(tolerations, toleration)
+				}
+			}
+		}
+	}
+
 	advertiseAddress, valueFound, err := unstructured.NestedString(hcp.UnstructuredContent(), "spec", "networking", "apiServer", "advertiseAddress")
 	if err != nil {
 		return nil, fmt.Errorf("failed extract advertiseAddress: %v", err)
@@ -192,6 +245,7 @@ func ParseHostedControlPlane(hcp *unstructured.Unstructured) (*HostedControlPlan
 		ControllerAvailabilityPolicy: AvailabilityPolicy(controllerAvailabilityPolicy),
 		ClusterID:                    clusterID,
 		NodeSelector:                 nodeSelector,
+		Tolerations:                  tolerations,
 		AdvertiseAddress:             advertiseAddress,
 		AdvertisePort:                int(advertisePort),
 		PriorityClass:                controlPlanePriorityClassAnnotation,
@@ -251,4 +305,22 @@ func SetHostedControlPlaneConditions(hcp *unstructured.Unstructured, operStatus 
 	// because it does a DeepCopy and metav1.Condition doesn't implement it
 	hcp.Object["status"].(map[string]interface{})["conditions"] = conditions
 	return conditions, nil
+}
+
+func TolerationsToStringArray(tolerations []corev1.Toleration) ([]string, error) {
+	yamlBytes, err := yaml.Marshal(tolerations)
+	if err != nil {
+		return nil, err
+	}
+
+	yamlStrs := []string{}
+	for _, arg := range strings.Split(string(yamlBytes), "\n") {
+
+		// filter out null and empty strings
+		if strings.Contains(arg, ": null") || strings.Contains(arg, ": \"\"") {
+			continue
+		}
+		yamlStrs = append(yamlStrs, arg)
+	}
+	return yamlStrs, nil
 }

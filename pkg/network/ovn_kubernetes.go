@@ -215,6 +215,11 @@ func renderOVNKubernetes(conf *operv1.NetworkSpec, bootstrapResult *bootstrap.Bo
 	data.Data["ClusterID"] = bootstrapResult.OVN.OVNKubernetesConfig.HyperShiftConfig.ClusterID
 	data.Data["ClusterIDLabel"] = hypershift.ClusterIDLabel
 	data.Data["HCPNodeSelector"] = bootstrapResult.OVN.OVNKubernetesConfig.HyperShiftConfig.HCPNodeSelector
+	if len(bootstrapResult.OVN.OVNKubernetesConfig.HyperShiftConfig.HCPTolerations) != 0 {
+		data.Data["HCPTolerations"] = bootstrapResult.OVN.OVNKubernetesConfig.HyperShiftConfig.HCPTolerations
+	} else {
+		data.Data["HCPTolerations"] = ""
+	}
 	data.Data["OVN_NB_INACTIVITY_PROBE"] = nb_inactivity_probe
 	data.Data["OVN_CERT_CN"] = OVN_CERT_CN
 	data.Data["OVN_NORTHD_PROBE_INTERVAL"] = os.Getenv("OVN_NORTHD_PROBE_INTERVAL")
@@ -703,6 +708,13 @@ func bootstrapOVNHyperShiftConfig(hc *hypershift.HyperShiftConfig, kubeClient cn
 
 	ovnHypershiftResult.ClusterID = hcp.ClusterID
 	ovnHypershiftResult.HCPNodeSelector = hcp.NodeSelector
+
+	tolerations, err := hypershift.TolerationsToStringArray(hcp.Tolerations)
+	if err != nil {
+		return nil, err
+	}
+	ovnHypershiftResult.HCPTolerations = tolerations
+
 	switch hcp.ControllerAvailabilityPolicy {
 	case hypershift.HighlyAvailable:
 		ovnHypershiftResult.ControlPlaneReplicas = 3
