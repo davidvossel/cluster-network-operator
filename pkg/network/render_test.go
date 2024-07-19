@@ -2,6 +2,9 @@ package network
 
 import (
 	"fmt"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"reflect"
 	"strings"
 
@@ -78,6 +81,133 @@ func TestClusterNetworkChangeOkOnMigration(t *testing.T) {
 	)
 	err := IsChangeSafe(prev, next, infra)
 	g.Expect(err).NotTo(HaveOccurred())
+
+}
+
+// HostedControlPlane tolerations
+// =================================
+func TestHyperShiftTolerations(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	config := operv1.Network{
+		Spec: operv1.NetworkSpec{
+			ServiceNetwork: []string{"172.30.0.0/16"},
+			ClusterNetwork: []operv1.ClusterNetworkEntry{
+				{
+					CIDR:       "10.128.0.0/15",
+					HostPrefix: 23,
+				},
+				{
+					CIDR:       "10.0.0.0/14",
+					HostPrefix: 24,
+				},
+			},
+			DefaultNetwork: operv1.DefaultNetworkDefinition{
+				Type: "MyAwesomeThirdPartyPlugin",
+			},
+		},
+	}
+
+	// Bootstrap a client with an infrastructure object
+	if err := configv1.AddToScheme(scheme.Scheme); err != nil {
+		t.Fatalf("failed to add configv1 to scheme: %v", err)
+	}
+	infrastructure := &configv1.Infrastructure{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+		Status: configv1.InfrastructureStatus{
+			PlatformStatus: &configv1.PlatformStatus{},
+		},
+	}
+
+	client := fake.NewFakeClient(infrastructure)
+	err := createProxy(client)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	err = Validate(&config.Spec)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	prev := config.Spec.DeepCopy()
+	fillDefaults(prev, nil)
+	next := config.Spec.DeepCopy()
+	fillDefaults(next, nil)
+
+	err = IsChangeSafe(prev, next, &fakeBootstrapResult().Infra)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	featureGatesCNO := featuregates.NewFeatureGate([]configv1.FeatureGateName{}, []configv1.FeatureGateName{})
+
+	hcpTolerations := []corev1.Toleration{
+		{
+			Key:               "node.kubernetes.io/not-ready",
+			Operator:          "Exists",
+			Value:             "",
+			Effect:            "NoExecute",
+			TolerationSeconds: nil,
+		},
+		{
+			Key:               "node.kubernetes.io/unreachable",
+			Operator:          "Exists",
+			Value:             "",
+			Effect:            "NoExecute",
+			TolerationSeconds: nil,
+		},
+		{
+			Key:               "node.kubernetes.io/memory-pressure",
+			Operator:          "Exists",
+			Value:             "",
+			Effect:            "NoSchedule",
+			TolerationSeconds: nil,
+		},
+		{
+			Key:               "key1",
+			Operator:          "Equal",
+			Value:             "value1",
+			Effect:            "NoSchedule",
+			TolerationSeconds: nil,
+		},
+		{
+			Key:               "key1",
+			Operator:          "Exists",
+			Value:             "",
+			Effect:            "NoSchedule",
+			TolerationSeconds: nil,
+		},
+	}
+
+	// fake that we are in HyperShift hosted cluster
+	bootstrapResult := fakeBootstrapResult()
+	bootstrapResult.Infra = bootstrap.InfraStatus{}
+	bootstrapResult.Infra.HostedControlPlane = &hypershift.HostedControlPlane{
+		ClusterID:                    "",
+		ControllerAvailabilityPolicy: "",
+		NodeSelector: map[string]string{
+			"kubernetes.io/os": "linux",
+		},
+		Tolerations:      hcpTolerations,
+		AdvertiseAddress: "",
+		AdvertisePort:    0,
+		PriorityClass:    "",
+	}
+
+	err = Validate(&config.Spec)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	objs, _, err := Render(prev, &configv1.NetworkSpec{}, manifestDir, client, featureGatesCNO, bootstrapResult)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	for _, obj := range objs {
+		if obj.GetKind() == "Deployment" {
+			deployment := &appsv1.Deployment{}
+			err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, deployment)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(deployment.Spec.Template.Spec.Tolerations).To(ContainElements(hcpTolerations))
+		} else if obj.GetKind() == "DaemonSet" && obj.GetName() != "multus" {
+			daemonset := &appsv1.DaemonSet{}
+			err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, daemonset)
+			g.Expect(daemonset.Spec.Template.Spec.Tolerations).To(ContainElements(hcpTolerations))
+		}
+
+	}
 
 }
 
